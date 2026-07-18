@@ -1,0 +1,107 @@
+name: Build and Release Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact_name: AI_Tools_Installer_macOS.dmg
+            build_cmd: ./build_macos.sh
+          - os: windows-latest
+            artifact_name: AI_Tools_Installer_Windows.exe
+            build_cmd: build_windows.bat
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller & Dependencies
+        run: pip install pyinstaller requests
+
+      - name: Setup Node.js (for Claude Code pack)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Prepare Payload Directory
+        run: mkdir payload
+
+      - name: Download Mac & Win Node.js and Claude Code
+        shell: bash
+        run: |
+          curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-darwin-arm64.tar.gz" -o payload/node-mac-arm64.tar.gz
+          curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-darwin-x64.tar.gz" -o payload/node-mac-x64.tar.gz
+          curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-win-x64.zip" -o payload/node-win-x64.zip
+          cd payload && npm pack @anthropic-ai/claude-code && cd ..
+
+      - name: Download Pre-compiled Mac Codex
+        shell: bash
+        run: |
+          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-aarch64-apple-darwin.tar.gz" -o payload/codex-mac-arm64.tar.gz
+          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-x86_64-apple-darwin.tar.gz" -o payload/codex-mac-x64.tar.gz
+
+      - name: Compile Windows Codex (Only on Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git clone https://github.com/openai/codex.git codex_src
+          cd codex_src
+          cargo build --release
+          cd ..
+          mkdir codex_win_tmp
+          copy codex_src\target\release\codex.exe codex_win_tmp\
+          powershell Compress-Archive -Path codex_win_tmp\* -DestinationPath payload\codex-win-x64.zip
+
+      - name: Build macOS App & DMG
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --windowed --noconfirm --name "AI Tools Installer" --add-data "payload:payload" gui_installer.py
+          cd dist
+          hdiutil create -volname "AI Tools Installer" -srcfolder "AI Tools Installer.app" -ov -format UDZO "AI_Tools_Installer_macOS.dmg"
+          mv "AI_Tools_Installer_macOS.dmg" ../
+
+      - name: Build Windows EXE
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --windowed --onefile --noconfirm --name "AI Tools Installer" --add-data "payload;payload" gui_installer.py
+          move dist\AI Tools Installer.exe AI_Tools_Installer_Windows.exe
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ runner.os }}
+          path: |
+            AI_Tools_Installer_macOS.dmg
+            AI_Tools_Installer_Windows.exe
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
