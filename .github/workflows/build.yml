@@ -55,16 +55,12 @@ jobs:
           curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-win-x64.zip" -o payload/node-win-x64.zip
           cd payload && npm pack @anthropic-ai/claude-code && cd ..
 
-      - name: Compile Windows Codex (Windows only)
+      - name: Download Windows Codex (Windows only)
         if: runner.os == 'Windows'
+        shell: bash
         run: |
-          git clone https://github.com/openai/codex.git codex_src
-          cd codex_src\codex-rs
-          cargo build --release
-          cd ..\..
-          mkdir codex_win_tmp
-          copy codex_src\codex-rs\target\release\codex.exe codex_win_tmp\
-          powershell Compress-Archive -Path codex_win_tmp\* -DestinationPath payload\codex-win-x64.zip
+          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-x86_64-pc-windows-msvc.exe" -o codex.exe
+          powershell -Command "Compress-Archive -Path codex.exe -DestinationPath payload/codex-win-x64.zip -Force"
 
       - name: Build macOS App & DMG
         if: runner.os == 'macOS'
