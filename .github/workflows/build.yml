@@ -59,7 +59,7 @@ jobs:
         run: |
           git clone https://github.com/openai/codex.git codex_src
           cd codex_src
-          cargo build --release
+          cargo build --manifest-path codex-cli/Cargo.toml --release
           cd ..
           mkdir codex_win_tmp
           copy codex_src\target\release\codex.exe codex_win_tmp\
