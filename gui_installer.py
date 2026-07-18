@@ -48,7 +48,6 @@ def get_install_dirs():
     os.makedirs(bin_dir, exist_ok=True)
     os.makedirs(app_dir, exist_ok=True)
     
-    # Ensure bin_dir is in PATH for Mac
     if IS_MAC:
         shell_rc = os.path.expanduser("~/.zshrc")
         if os.path.exists(shell_rc):
@@ -68,9 +67,10 @@ def install_codex():
     if IS_MAC:
         filename = "codex-mac-arm64.tar.gz" if IS_ARM else "codex-mac-x64.tar.gz"
         archive_path = get_resource_path(f"payload/{filename}")
+        if not os.path.exists(archive_path):
+            raise Exception(f"macOS Codex payload not found: {filename}")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=bin_dir)
-            # Find the binary
             for member in tar.getmembers():
                 if member.isfile() and "codex" in member.name:
                     extracted_path = os.path.join(bin_dir, member.name)
@@ -80,11 +80,10 @@ def install_codex():
                     os.chmod(final_path, 0o755)
     elif IS_WIN:
         archive_path = get_resource_path("payload/codex-win-x64.zip")
-        if os.path.getsize(archive_path) < 100:
-            raise Exception("Codex CLI for Windows is not available in the official release.")
+        if not os.path.exists(archive_path):
+            raise Exception("Windows Codex payload not found.")
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             zip_ref.extractall(bin_dir)
-            # Move if it's in a subdirectory
             for root, dirs, files in os.walk(bin_dir):
                 for file in files:
                     if "codex.exe" in file:
@@ -97,23 +96,24 @@ def install_claude_code():
     bin_dir, app_dir = get_install_dirs()
     node_dir = os.path.join(app_dir, "node")
     
-    # 1. Extract Node
     if IS_MAC:
         filename = "node-mac-arm64.tar.gz" if IS_ARM else "node-mac-x64.tar.gz"
         archive_path = get_resource_path(f"payload/{filename}")
+        if not os.path.exists(archive_path):
+            raise Exception(f"macOS Node payload not found: {filename}")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=app_dir)
-            # rename extracted folder to 'node'
             extracted_folder = [m.name for m in tar.getmembers() if m.isdir()][0].split('/')[0]
             if os.path.exists(node_dir):
                 shutil.rmtree(node_dir)
             shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
         
         npm_bin = os.path.join(node_dir, "bin", "npm")
-        node_bin = os.path.join(node_dir, "bin", "node")
         claude_bin = os.path.join(node_dir, "bin", "claude")
     elif IS_WIN:
         archive_path = get_resource_path("payload/node-win-x64.zip")
+        if not os.path.exists(archive_path):
+            raise Exception("Windows Node payload not found.")
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             zip_ref.extractall(app_dir)
             extracted_folder = zip_ref.namelist()[0].split('/')[0]
@@ -121,10 +121,8 @@ def install_claude_code():
                 shutil.rmtree(node_dir)
             shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
         npm_bin = os.path.join(node_dir, "npm.cmd")
-        node_bin = os.path.join(node_dir, "node.exe")
         claude_bin = os.path.join(node_dir, "claude.cmd")
         
-    # 2. Find Claude Code tgz
     payload_dir = get_resource_path("payload")
     claude_tgz = None
     for f in os.listdir(payload_dir):
@@ -135,10 +133,8 @@ def install_claude_code():
     if not claude_tgz:
         raise Exception("Claude code npm package not found in payload.")
 
-    # 3. Install via npm
     subprocess.run([npm_bin, "install", "-g", claude_tgz], check=True, env=os.environ.copy())
     
-    # 4. Link to bin_dir
     if IS_MAC:
         target_link = os.path.join(bin_dir, "claude")
         if os.path.exists(target_link) or os.path.islink(target_link):
@@ -165,7 +161,7 @@ class InstallerApp:
         self.var_codex = tk.BooleanVar(value=True)
         self.var_claude = tk.BooleanVar(value=True)
         
-        cb_codex = ttk.Checkbutton(root, text="Install Codex CLI (Rust)", variable=self.var_codex)
+        cb_codex = ttk.Checkbutton(root, text="Install Codex CLI", variable=self.var_codex)
         cb_codex.pack(anchor="w", padx=50, pady=10)
         
         cb_claude = ttk.Checkbutton(root, text="Install Claude Code CLI", variable=self.var_claude)

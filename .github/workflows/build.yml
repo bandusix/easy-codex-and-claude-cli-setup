@@ -15,10 +15,8 @@ jobs:
         include:
           - os: macos-latest
             artifact_name: AI_Tools_Installer_macOS.dmg
-            build_cmd: ./build_macos.sh
           - os: windows-latest
             artifact_name: AI_Tools_Installer_Windows.exe
-            build_cmd: build_windows.bat
 
     steps:
       - name: Checkout Code
@@ -40,27 +38,30 @@ jobs:
       - name: Prepare Payload Directory
         run: mkdir payload
 
-      - name: Download Mac & Win Node.js and Claude Code
+      - name: Download macOS Payloads (macOS only)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-darwin-arm64.tar.gz" -o payload/node-mac-arm64.tar.gz
           curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-darwin-x64.tar.gz" -o payload/node-mac-x64.tar.gz
+          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-aarch64-apple-darwin.tar.gz" -o payload/codex-mac-arm64.tar.gz
+          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-x86_64-apple-darwin.tar.gz" -o payload/codex-mac-x64.tar.gz
+          cd payload && npm pack @anthropic-ai/claude-code && cd ..
+
+      - name: Download Windows Payloads (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
           curl -sL "https://nodejs.org/dist/v20.11.1/node-v20.11.1-win-x64.zip" -o payload/node-win-x64.zip
           cd payload && npm pack @anthropic-ai/claude-code && cd ..
 
-      - name: Download Pre-compiled Mac Codex
-        shell: bash
-        run: |
-          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-aarch64-apple-darwin.tar.gz" -o payload/codex-mac-arm64.tar.gz
-          curl -sL "https://github.com/openai/codex/releases/download/rust-v0.144.5/codex-x86_64-apple-darwin.tar.gz" -o payload/codex-mac-x64.tar.gz
-
-      - name: Compile Windows Codex (Only on Windows)
+      - name: Compile Windows Codex (Windows only)
         if: runner.os == 'Windows'
         run: |
           git clone https://github.com/openai/codex.git codex_src
-          cd codex_src
-          cd codex-rs && cargo build --release
-          cd ..
+          cd codex_src\codex-rs
+          cargo build --release
+          cd ..\..
           mkdir codex_win_tmp
           copy codex_src\codex-rs\target\release\codex.exe codex_win_tmp\
           powershell Compress-Archive -Path codex_win_tmp\* -DestinationPath payload\codex-win-x64.zip
