@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import locale
+import webbrowser
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import font as tkfont
@@ -541,7 +542,9 @@ CARD_Y2 = CARD_Y1 + CARD_PAD * 2 + ROW_H * len(TOOLS)
 BTN_Y = CARD_Y2 + 26
 BTN_H = 46
 STATUS_Y = BTN_Y + BTN_H + 22
-WIN_H = STATUS_Y + 46
+WIN_H = STATUS_Y + 46 + 22
+
+LICENSE_URL = "https://github.com/bandusix/easy-codex-and-claude-cli-setup/blob/main/LICENSE"
 
 
 class InstallerApp:
@@ -640,7 +643,17 @@ class InstallerApp:
 
     def _build_footer(self):
         c = self.canvas
-        self.footer_id = c.create_text(WIN_W / 2, WIN_H - 20, fill=COLOR_SUBTEXT, text="")
+        self.footer_id = c.create_text(WIN_W / 2, WIN_H - 40, fill=COLOR_SUBTEXT, text="")
+
+        credit_color = "#B0B0B3" if IS_MAC else "#A6A6A6"
+        credit_id = c.create_text(
+            WIN_W / 2, WIN_H - 18,
+            text="Released under the MIT License · Copyright © 2026 bandusix",
+            fill=credit_color, font=tkfont.Font(size=8),
+        )
+        c.tag_bind(credit_id, "<Button-1>", lambda e: webbrowser.open(LICENSE_URL))
+        c.tag_bind(credit_id, "<Enter>", lambda e: c.config(cursor="pointinghand" if IS_MAC else "hand2"))
+        c.tag_bind(credit_id, "<Leave>", lambda e: c.config(cursor=""))
 
     # -- language application ----------------------------------------------
     def apply_language(self, lang):
