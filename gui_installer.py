@@ -20,6 +20,10 @@ IS_WIN = platform.system() == "Windows"
 ARCH = platform.machine().lower()
 IS_ARM = "arm" in ARCH or "aarch64" in ARCH
 
+# Prevents a console window from flashing/popping up when this --windowed
+# GUI app spawns npm.cmd or other console subprocesses on Windows.
+_NO_WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if IS_WIN else 0
+
 
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -38,7 +42,8 @@ def add_to_path_win(target_dir):
         if target_dir not in current_path:
             new_path = current_path + ";" + target_dir
             winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_path)
-            subprocess.run(["setx", "PATH", new_path], shell=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["setx", "PATH", new_path], shell=True, stdout=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW_FLAGS)
     except Exception as e:
         print(f"Failed to update PATH: {e}")
 
@@ -138,6 +143,18 @@ def _npm_bin(node_dir):
     return os.path.join(node_dir, "npm.cmd")
 
 
+def _run_npm(args, env):
+    """Run an npm command with output captured (never inherited) so no console
+    window flashes on Windows, and so a failure's stderr tail is actually visible
+    in the error dialog instead of a bare 'non-zero exit status'."""
+    try:
+        subprocess.run(args, check=True, env=env, capture_output=True, text=True,
+                        creationflags=_NO_WINDOW_FLAGS)
+    except subprocess.CalledProcessError as e:
+        tail = (e.stderr or e.stdout or "").strip().splitlines()[-15:]
+        raise Exception("npm failed:\n" + "\n".join(tail)) from e
+
+
 def _find_payload_tgz(prefix):
     payload_dir = get_resource_path("payload")
     for f in os.listdir(payload_dir):
@@ -170,7 +187,7 @@ def install_claude_code():
     if not tgz:
         raise Exception("Claude Code npm package not found in payload.")
 
-    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _run_npm([npm_bin, "install", "-g", tgz], os.environ.copy())
     _expose_shim(bin_dir, node_dir, "claude")
 
 
@@ -183,7 +200,7 @@ def install_gemini():
     if not tgz:
         raise Exception("Gemini CLI npm package not found in payload.")
 
-    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _run_npm([npm_bin, "install", "-g", tgz], os.environ.copy())
     _expose_shim(bin_dir, node_dir, "gemini")
 
 
@@ -196,7 +213,7 @@ def install_kimi():
     if not tgz:
         raise Exception("Kimi Code CLI npm package not found in payload.")
 
-    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _run_npm([npm_bin, "install", "-g", tgz], os.environ.copy())
     _expose_shim(bin_dir, node_dir, "kimi")
 
 
@@ -213,7 +230,7 @@ def install_feishu():
     if not tgz:
         raise Exception("Feishu (lark-cli) npm package not found in payload.")
 
-    subprocess.run([npm_bin, "install", "-g", "--ignore-scripts", tgz], check=True, env=os.environ.copy())
+    _run_npm([npm_bin, "install", "-g", "--ignore-scripts", tgz], os.environ.copy())
 
     if IS_MAC:
         pkg_bin_dir = os.path.join(node_dir, "lib", "node_modules", "@larksuite", "cli", "bin")
