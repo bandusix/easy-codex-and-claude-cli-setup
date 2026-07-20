@@ -101,9 +101,14 @@ def install_codex():
                             shutil.move(extracted_path, final_path)
 
 
-def install_claude_code():
-    bin_dir, app_dir = get_install_dirs()
+# ---------------------------------------------------------------------------
+# Shared helpers for the Node.js-based tools (Claude Code, Gemini, Kimi, Lark)
+# ---------------------------------------------------------------------------
+def _ensure_node(app_dir):
+    """Extract the bundled portable Node.js runtime once. Safe to call repeatedly."""
     node_dir = os.path.join(app_dir, "node")
+    if os.path.exists(node_dir):
+        return node_dir
 
     if IS_MAC:
         filename = "node-mac-arm64.tar.gz" if IS_ARM else "node-mac-x64.tar.gz"
@@ -113,46 +118,134 @@ def install_claude_code():
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=app_dir)
             extracted_folder = [m.name for m in tar.getmembers() if m.isdir()][0].split('/')[0]
-            if os.path.exists(node_dir):
-                shutil.rmtree(node_dir)
-            shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
-
-        npm_bin = os.path.join(node_dir, "bin", "npm")
-        claude_bin = os.path.join(node_dir, "bin", "claude")
+        shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
     elif IS_WIN:
         archive_path = get_resource_path("payload/node-win-x64.zip")
         if not os.path.exists(archive_path):
             raise Exception("Windows Node payload not found.")
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            zip_ref.extractall(app_dir)
+            zip_ref.extractall(path=app_dir)
             extracted_folder = zip_ref.namelist()[0].split('/')[0]
-            if os.path.exists(node_dir):
-                shutil.rmtree(node_dir)
-            shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
-        npm_bin = os.path.join(node_dir, "npm.cmd")
-        claude_bin = os.path.join(node_dir, "claude.cmd")
+        shutil.move(os.path.join(app_dir, extracted_folder), node_dir)
 
-    payload_dir = get_resource_path("payload")
-    claude_tgz = None
-    for f in os.listdir(payload_dir):
-        if f.startswith("anthropic-ai-claude-code") and f.endswith(".tgz"):
-            claude_tgz = os.path.join(payload_dir, f)
-            break
+    return node_dir
 
-    if not claude_tgz:
-        raise Exception("Claude code npm package not found in payload.")
 
-    subprocess.run([npm_bin, "install", "-g", claude_tgz], check=True, env=os.environ.copy())
-
+def _npm_bin(node_dir):
     if IS_MAC:
-        target_link = os.path.join(bin_dir, "claude")
+        return os.path.join(node_dir, "bin", "npm")
+    return os.path.join(node_dir, "npm.cmd")
+
+
+def _find_payload_tgz(prefix):
+    payload_dir = get_resource_path("payload")
+    for f in os.listdir(payload_dir):
+        if f.startswith(prefix) and f.endswith(".tgz"):
+            return os.path.join(payload_dir, f)
+    return None
+
+
+def _expose_shim(bin_dir, node_dir, shim_name):
+    """Expose a shim created inside node_dir by `npm install -g` via bin_dir (on PATH)."""
+    if IS_MAC:
+        node_shim = os.path.join(node_dir, "bin", shim_name)
+        target_link = os.path.join(bin_dir, shim_name)
         if os.path.exists(target_link) or os.path.islink(target_link):
             os.remove(target_link)
-        os.symlink(claude_bin, target_link)
+        os.symlink(node_shim, target_link)
     elif IS_WIN:
-        target_bat = os.path.join(bin_dir, "claude.cmd")
+        node_shim = os.path.join(node_dir, shim_name + ".cmd")
+        target_bat = os.path.join(bin_dir, shim_name + ".cmd")
         with open(target_bat, "w") as f:
-            f.write(f'@echo off\n"{claude_bin}" %*')
+            f.write(f'@echo off\n"{node_shim}" %*')
+
+
+def install_claude_code():
+    bin_dir, app_dir = get_install_dirs()
+    node_dir = _ensure_node(app_dir)
+    npm_bin = _npm_bin(node_dir)
+
+    tgz = _find_payload_tgz("anthropic-ai-claude-code")
+    if not tgz:
+        raise Exception("Claude Code npm package not found in payload.")
+
+    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _expose_shim(bin_dir, node_dir, "claude")
+
+
+def install_gemini():
+    bin_dir, app_dir = get_install_dirs()
+    node_dir = _ensure_node(app_dir)
+    npm_bin = _npm_bin(node_dir)
+
+    tgz = _find_payload_tgz("google-gemini-cli")
+    if not tgz:
+        raise Exception("Gemini CLI npm package not found in payload.")
+
+    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _expose_shim(bin_dir, node_dir, "gemini")
+
+
+def install_kimi():
+    bin_dir, app_dir = get_install_dirs()
+    node_dir = _ensure_node(app_dir)
+    npm_bin = _npm_bin(node_dir)
+
+    tgz = _find_payload_tgz("moonshot-ai-kimi-code")
+    if not tgz:
+        raise Exception("Kimi Code CLI npm package not found in payload.")
+
+    subprocess.run([npm_bin, "install", "-g", tgz], check=True, env=os.environ.copy())
+    _expose_shim(bin_dir, node_dir, "kimi")
+
+
+def install_feishu():
+    """@larksuite/cli ships a Go binary. Its postinstall script downloads that binary
+    from GitHub over the network, which would break an offline install — so we skip
+    that script (--ignore-scripts) and place the binary (bundled in payload/, fetched
+    during the CI build) into the exact path the package's own launcher expects."""
+    bin_dir, app_dir = get_install_dirs()
+    node_dir = _ensure_node(app_dir)
+    npm_bin = _npm_bin(node_dir)
+
+    tgz = _find_payload_tgz("larksuite-cli")
+    if not tgz:
+        raise Exception("Feishu (lark-cli) npm package not found in payload.")
+
+    subprocess.run([npm_bin, "install", "-g", "--ignore-scripts", tgz], check=True, env=os.environ.copy())
+
+    if IS_MAC:
+        pkg_bin_dir = os.path.join(node_dir, "lib", "node_modules", "@larksuite", "cli", "bin")
+        filename = "lark-cli-mac-arm64.tar.gz" if IS_ARM else "lark-cli-mac-x64.tar.gz"
+        archive_path = get_resource_path(f"payload/{filename}")
+        if not os.path.exists(archive_path):
+            raise Exception(f"macOS lark-cli payload not found: {filename}")
+        os.makedirs(pkg_bin_dir, exist_ok=True)
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(path=pkg_bin_dir)
+        os.chmod(os.path.join(pkg_bin_dir, "lark-cli"), 0o755)
+    elif IS_WIN:
+        pkg_bin_dir = os.path.join(node_dir, "node_modules", "@larksuite", "cli", "bin")
+        archive_path = get_resource_path("payload/lark-cli-win-x64.zip")
+        if not os.path.exists(archive_path):
+            raise Exception("Windows lark-cli payload not found.")
+        os.makedirs(pkg_bin_dir, exist_ok=True)
+        with zipfile.ZipFile(archive_path, "r") as zip_ref:
+            zip_ref.extractall(path=pkg_bin_dir)
+
+    _expose_shim(bin_dir, node_dir, "lark-cli")
+
+
+# ---------------------------------------------------------------------------
+# Tool registry — drives both the GUI rows and the install worker
+# ---------------------------------------------------------------------------
+TOOLS = [
+    {"id": "codex", "icon": "C", "color": "#3B82C4", "install": install_codex},
+    {"id": "claude", "icon": "A", "color": "#CC785C", "install": install_claude_code},
+    {"id": "gemini", "icon": "G", "color": "#8B5CF6", "install": install_gemini},
+    {"id": "kimi", "icon": "K", "color": "#0EA5A6", "install": install_kimi},
+    {"id": "feishu", "icon": "L", "color": "#3370FF", "install": install_feishu},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -164,60 +257,87 @@ LANG_LABELS = {"en": "EN", "zh-Hans": "简", "zh-Hant": "繁"}
 STRINGS = {
     "en": {
         "app_title": "AI Tools Installer",
-        "app_subtitle": "Set up Codex CLI & Claude Code — fully offline",
+        "app_subtitle": "Set up 5 AI coding CLIs — fully offline",
         "codex_title": "Codex CLI",
         "codex_desc": "OpenAI's coding agent for your terminal",
         "claude_title": "Claude Code CLI",
         "claude_desc": "Anthropic's coding agent for your terminal",
+        "gemini_title": "Gemini CLI",
+        "gemini_desc": "Google's coding agent for your terminal",
+        "kimi_title": "Kimi Code CLI",
+        "kimi_desc": "Moonshot AI's coding agent for your terminal",
+        "feishu_title": "Lark CLI",
+        "feishu_desc": "Official CLI for Feishu/Lark AI agents",
         "install_button": "Install Now",
         "installing_button": "Installing…",
         "status_idle": "",
         "status_installing_codex": "Installing Codex CLI…",
         "status_installing_claude": "Installing Claude Code (Node.js)…",
+        "status_installing_gemini": "Installing Gemini CLI (Node.js)…",
+        "status_installing_kimi": "Installing Kimi Code CLI (Node.js)…",
+        "status_installing_feishu": "Installing Lark CLI (Node.js)…",
         "status_done": "Installation complete",
         "status_failed": "Installation failed",
         "success_title": "Success",
-        "success_body": "Installation successful!\n\nInstalled to:\n{path}\n\nRestart your terminal to use 'codex' and 'claude'.",
+        "success_body": "Installation successful!\n\nInstalled to:\n{path}\n\nRestart your terminal to use the tools you installed.",
         "error_title": "Error",
         "error_body": "Something went wrong:\n{error}",
         "footer_hint": "Uncheck a tool to skip installing it.",
     },
     "zh-Hans": {
         "app_title": "AI 工具安装向导",
-        "app_subtitle": "离线安装 Codex CLI 与 Claude Code",
+        "app_subtitle": "离线安装 5 款 AI 编程 CLI",
         "codex_title": "Codex CLI",
         "codex_desc": "OpenAI 出品的终端编程助手",
         "claude_title": "Claude Code CLI",
         "claude_desc": "Anthropic 出品的终端编程助手",
+        "gemini_title": "Gemini CLI",
+        "gemini_desc": "Google 出品的终端编程助手",
+        "kimi_title": "Kimi Code CLI",
+        "kimi_desc": "Moonshot AI 出品的终端编程助手",
+        "feishu_title": "飞书 CLI",
+        "feishu_desc": "飞书官方 CLI，让 AI Agent 直接操作你的飞书",
         "install_button": "立即安装",
         "installing_button": "安装中…",
         "status_idle": "",
         "status_installing_codex": "正在安装 Codex CLI…",
         "status_installing_claude": "正在安装 Claude Code (Node.js)…",
+        "status_installing_gemini": "正在安装 Gemini CLI (Node.js)…",
+        "status_installing_kimi": "正在安装 Kimi Code CLI (Node.js)…",
+        "status_installing_feishu": "正在安装飞书 CLI (Node.js)…",
         "status_done": "安装完成",
         "status_failed": "安装失败",
         "success_title": "安装成功",
-        "success_body": "安装成功！\n\n已安装至：\n{path}\n\n请重启终端后使用 codex 和 claude 命令。",
+        "success_body": "安装成功！\n\n已安装至：\n{path}\n\n请重启终端后使用已安装的工具。",
         "error_title": "出错了",
         "error_body": "安装过程中出现错误：\n{error}",
         "footer_hint": "取消勾选可跳过对应工具的安装。",
     },
     "zh-Hant": {
         "app_title": "AI 工具安裝精靈",
-        "app_subtitle": "離線安裝 Codex CLI 與 Claude Code",
+        "app_subtitle": "離線安裝 5 款 AI 程式設計 CLI",
         "codex_title": "Codex CLI",
         "codex_desc": "OpenAI 推出的終端機程式設計助手",
         "claude_title": "Claude Code CLI",
         "claude_desc": "Anthropic 推出的終端機程式設計助手",
+        "gemini_title": "Gemini CLI",
+        "gemini_desc": "Google 推出的終端機程式設計助手",
+        "kimi_title": "Kimi Code CLI",
+        "kimi_desc": "Moonshot AI 推出的終端機程式設計助手",
+        "feishu_title": "飛書 CLI",
+        "feishu_desc": "飛書官方 CLI，讓 AI Agent 直接操作你的飛書",
         "install_button": "立即安裝",
         "installing_button": "安裝中…",
         "status_idle": "",
         "status_installing_codex": "正在安裝 Codex CLI…",
         "status_installing_claude": "正在安裝 Claude Code (Node.js)…",
+        "status_installing_gemini": "正在安裝 Gemini CLI (Node.js)…",
+        "status_installing_kimi": "正在安裝 Kimi Code CLI (Node.js)…",
+        "status_installing_feishu": "正在安裝飛書 CLI (Node.js)…",
         "status_done": "安裝完成",
         "status_failed": "安裝失敗",
         "success_title": "安裝成功",
-        "success_body": "安裝成功！\n\n已安裝至：\n{path}\n\n請重新啟動終端機後使用 codex 和 claude 指令。",
+        "success_body": "安裝成功！\n\n已安裝至：\n{path}\n\n請重新啟動終端機後使用已安裝的工具。",
         "error_title": "發生錯誤",
         "error_body": "安裝過程中發生錯誤：\n{error}",
         "footer_hint": "取消勾選可略過該工具的安裝。",
@@ -281,8 +401,6 @@ else:
 
 COLOR_SUCCESS = "#2E9B4E" if not IS_WIN else "#107C10"
 COLOR_ERROR = "#D63A2E" if not IS_WIN else "#C42B1C"
-COLOR_CODEX_ICON = "#3B82C4"
-COLOR_CLAUDE_ICON = "#CC785C"
 
 
 def family_for(lang):
@@ -415,7 +533,15 @@ class RoundedButton:
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
-WIN_W, WIN_H = 460, 410
+WIN_W = 460
+ROW_H = 58
+CARD_PAD = 20
+CARD_Y1 = 100
+CARD_Y2 = CARD_Y1 + CARD_PAD * 2 + ROW_H * len(TOOLS)
+BTN_Y = CARD_Y2 + 26
+BTN_H = 46
+STATUS_Y = BTN_Y + BTN_H + 22
+WIN_H = STATUS_Y + 46
 
 
 class InstallerApp:
@@ -433,6 +559,7 @@ class InstallerApp:
 
         self.lang_items = {}
         self.dynamic_texts = {}
+        self.toggles = {}
 
         self._build_static_chrome()
         self._build_header()
@@ -450,7 +577,6 @@ class InstallerApp:
     # -- static chrome (things that never change with language) -----------
     def _build_static_chrome(self):
         c = self.canvas
-        # icon badge
         rounded_rect(c, 28, 28, 28 + 44, 28 + 44, RADIUS_ICON, fill=COLOR_ACCENT, outline="")
         c.create_text(28 + 22, 28 + 23, text=">_", fill="white",
                        font=tkfont.Font(family="Menlo" if IS_MAC else "Consolas", size=15, weight="bold"))
@@ -476,52 +602,45 @@ class InstallerApp:
             bbox = c.bbox(item)
             x = bbox[0] - 12
 
+    def _row_cy(self, index):
+        return CARD_Y1 + CARD_PAD + ROW_H / 2 + index * ROW_H
+
     def _build_card(self):
         c = self.canvas
-        self.card_y1, self.card_y2 = 100, 268
         x1, x2 = 28, WIN_W - 28
-        rounded_rect(c, x1, self.card_y1 + 3, x2, self.card_y2 + 3, RADIUS_CARD, fill=COLOR_SHADOW, outline="")
-        rounded_rect(c, x1, self.card_y1, x2, self.card_y2, RADIUS_CARD,
+        rounded_rect(c, x1, CARD_Y1 + 3, x2, CARD_Y2 + 3, RADIUS_CARD, fill=COLOR_SHADOW, outline="")
+        rounded_rect(c, x1, CARD_Y1, x2, CARD_Y2, RADIUS_CARD,
                      fill=COLOR_CARD, outline=COLOR_CARD_BORDER, width=1)
 
-        row1_cy = self.card_y1 + 42
-        row2_cy = self.card_y1 + 126
-        divider_y = self.card_y1 + 84
-
-        c.create_line(44, divider_y, x2 - 16, divider_y, fill=COLOR_DIVIDER)
-
-        # row icons (monogram badges)
-        rounded_rect(c, 44, row1_cy - 16, 44 + 32, row1_cy + 16, RADIUS_ICON - 2, fill=COLOR_CODEX_ICON, outline="")
-        c.create_text(44 + 16, row1_cy, text="C", fill="white", font=tkfont.Font(size=13, weight="bold"))
-        rounded_rect(c, 44, row2_cy - 16, 44 + 32, row2_cy + 16, RADIUS_ICON - 2, fill=COLOR_CLAUDE_ICON, outline="")
-        c.create_text(44 + 16, row2_cy, text="A", fill="white", font=tkfont.Font(size=13, weight="bold"))
-
-        text_x = 44 + 32 + 14
-        self.dynamic_texts["codex_title"] = c.create_text(
-            text_x, row1_cy - 10, anchor="w", fill=COLOR_TEXT, text="")
-        self.dynamic_texts["codex_desc"] = c.create_text(
-            text_x, row1_cy + 9, anchor="w", fill=COLOR_SUBTEXT, text="")
-        self.dynamic_texts["claude_title"] = c.create_text(
-            text_x, row2_cy - 10, anchor="w", fill=COLOR_TEXT, text="")
-        self.dynamic_texts["claude_desc"] = c.create_text(
-            text_x, row2_cy + 9, anchor="w", fill=COLOR_SUBTEXT, text="")
-
+        text_x = 44 + 28 + 14
         toggle_x = x2 - 16 - 40
-        self.toggle_codex = ToggleSwitch(c, toggle_x, row1_cy - 11, value=True)
-        self.toggle_claude = ToggleSwitch(c, toggle_x, row2_cy - 11, value=True)
+
+        for i, tool in enumerate(TOOLS):
+            cy = self._row_cy(i)
+            if i > 0:
+                c.create_line(44, cy - ROW_H / 2, x2 - 16, cy - ROW_H / 2, fill=COLOR_DIVIDER)
+
+            rounded_rect(c, 44, cy - 14, 44 + 28, cy + 14, RADIUS_ICON - 2, fill=tool["color"], outline="")
+            c.create_text(44 + 14, cy, text=tool["icon"], fill="white", font=tkfont.Font(size=12, weight="bold"))
+
+            self.dynamic_texts[f"{tool['id']}_title"] = c.create_text(
+                text_x, cy - 9, anchor="w", fill=COLOR_TEXT, text="")
+            self.dynamic_texts[f"{tool['id']}_desc"] = c.create_text(
+                text_x, cy + 9, anchor="w", fill=COLOR_SUBTEXT, text="")
+
+            self.toggles[tool["id"]] = ToggleSwitch(c, toggle_x, cy - 11, value=True)
 
     def _build_button_and_status(self):
         c = self.canvas
-        btn_y = self.card_y2 + 28
         self.btn = RoundedButton(
-            c, 28, btn_y, WIN_W - 56, 46, "", self.start_install,
+            c, 28, BTN_Y, WIN_W - 56, BTN_H, "", self.start_install,
             bg=COLOR_ACCENT, font=None,
         )
-        self.status_id = c.create_text(WIN_W / 2, btn_y + 46 + 22, fill=COLOR_SUBTEXT, text="")
+        self.status_id = c.create_text(WIN_W / 2, STATUS_Y, fill=COLOR_SUBTEXT, text="")
 
     def _build_footer(self):
         c = self.canvas
-        self.footer_id = c.create_text(WIN_W / 2, WIN_H - 22, fill=COLOR_SUBTEXT, text="")
+        self.footer_id = c.create_text(WIN_W / 2, WIN_H - 20, fill=COLOR_SUBTEXT, text="")
 
     # -- language application ----------------------------------------------
     def apply_language(self, lang):
@@ -542,10 +661,10 @@ class InstallerApp:
         S = STRINGS[lang]
         c.itemconfig(self.dynamic_texts["app_title"], text=S["app_title"], font=f_title)
         c.itemconfig(self.dynamic_texts["app_subtitle"], text=S["app_subtitle"], font=f_sub)
-        c.itemconfig(self.dynamic_texts["codex_title"], text=S["codex_title"], font=f_row_title)
-        c.itemconfig(self.dynamic_texts["codex_desc"], text=S["codex_desc"], font=f_row_desc)
-        c.itemconfig(self.dynamic_texts["claude_title"], text=S["claude_title"], font=f_row_title)
-        c.itemconfig(self.dynamic_texts["claude_desc"], text=S["claude_desc"], font=f_row_desc)
+        for tool in TOOLS:
+            tid = tool["id"]
+            c.itemconfig(self.dynamic_texts[f"{tid}_title"], text=S[f"{tid}_title"], font=f_row_title)
+            c.itemconfig(self.dynamic_texts[f"{tid}_desc"], text=S[f"{tid}_desc"], font=f_row_desc)
         c.itemconfig(self.footer_id, text=S["footer_hint"], font=f_footer)
 
         if not self.installing:
@@ -567,28 +686,24 @@ class InstallerApp:
         if self.installing:
             return
         S = STRINGS[self.lang]
-        do_codex = self.toggle_codex.get()
-        do_claude = self.toggle_claude.get()
-        if not do_codex and not do_claude:
+        selected = [tool for tool in TOOLS if self.toggles[tool["id"]].get()]
+        if not selected:
             return
 
         self.installing = True
         self.btn.set_enabled(False)
         self.btn.set_text(S["installing_button"])
-        self.set_status(S["status_installing_codex"] if do_codex else S["status_installing_claude"], COLOR_SUBTEXT)
+        self.set_status(S[f"status_installing_{selected[0]['id']}"], COLOR_SUBTEXT)
 
-        thread = threading.Thread(target=self._install_worker, args=(do_codex, do_claude), daemon=True)
+        thread = threading.Thread(target=self._install_worker, args=(selected,), daemon=True)
         thread.start()
 
-    def _install_worker(self, do_codex, do_claude):
+    def _install_worker(self, selected):
         S = STRINGS[self.lang]
         try:
-            if do_codex:
-                self.root.after(0, lambda: self.set_status(S["status_installing_codex"], COLOR_SUBTEXT))
-                install_codex()
-            if do_claude:
-                self.root.after(0, lambda: self.set_status(S["status_installing_claude"], COLOR_SUBTEXT))
-                install_claude_code()
+            for tool in selected:
+                self.root.after(0, lambda t=tool: self.set_status(S[f"status_installing_{t['id']}"], COLOR_SUBTEXT))
+                tool["install"]()
             self.root.after(0, self._on_install_success)
         except Exception as e:
             err = str(e)
